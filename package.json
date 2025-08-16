@@ -1,0 +1,37 @@
+{
+  "name": "amosjs",
+  "version": "0.1.0",
+  "description": "Transpile AMOS (.AMOS) programs from the Amiga into JavaScript with an IP-driven switch scheduler.",
+  "bin": {
+    "amosjs": "src/cli.js"
+  },
+  "type": "commonjs",
+  "main": "src/index.js",
+  "files": [
+    "src",
+    "docs"
+  ],
+  "scripts": {
+    "test": "node test/run.js",
+    "lint": "node -e \"console.log('No linter configured')\"",
+    "prepare": "node -e \"console.log('No build step')\""
+  },
+  "keywords": [
+    "AMOS",
+    "Amiga",
+    "transpiler",
+    "BASIC",
+    "compiler",
+    "tokenizer"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
+
