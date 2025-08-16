@@ -48,7 +48,7 @@ function generateJS(ir) {
     const start = leaders[i];
     const end = (i + 1 < leaders.length) ? leaders[i + 1] : ir.length;
     lines.push(`    case ${start}: {`);
-    lines.push(`      let ip = ${start};`);
+    let terminatedInBlock = false;
     for (let ip = start; ip < end; ip++) {
       const ins = ir[ip];
       // Emit sequential execution; branch ops break out by setting state.ip
@@ -59,19 +59,19 @@ function generateJS(ir) {
         const tgt = typeof ins.target === 'number' ? ins.target : 0;
         const l = ipToLeader[tgt];
         lines.push(`      state.ip = ${l}; break;`);
-        // Stop emitting further sequential ops in this block after a branch
-        break;
+        terminatedInBlock = true; break;
       } else if (ins.op === 'GOSUB') {
         const tgt = typeof ins.target === 'number' ? ins.target : 0;
         const l = ipToLeader[tgt];
-        lines.push(`      state.gosub.push(${end}); state.ip = ${l}; break;`);
-        break;
+        const retLeader = ipToLeader[Math.min(ip + 1, ir.length - 1)] ?? l;
+        lines.push(`      state.gosub.push(${retLeader}); state.ip = ${l}; break;`);
+        terminatedInBlock = true; break;
       } else if (ins.op === 'RETURN') {
         lines.push(`      const ret = state.gosub.pop(); if (ret==null){ state.halted=true; break; } state.ip = ret; break;`);
-        break;
+        terminatedInBlock = true; break;
       } else if (ins.op === 'END') {
         lines.push('      state.halted = true; break;');
-        break;
+        terminatedInBlock = true; break;
       } else if (ins.op === 'FOR') {
         // initialize var and push frame
         const from = Number(ins.from|0);
@@ -93,10 +93,12 @@ function generateJS(ir) {
       }
     }
     // If we didn’t branch/return/halt above, set ip to next leader and break
-    if (i + 1 < leaders.length) {
-      lines.push(`      state.ip = ${leaders[i+1]}; break;`);
-    } else {
-      lines.push('      state.halted = true; break;');
+    if (!terminatedInBlock) {
+      if (i + 1 < leaders.length) {
+        lines.push(`      state.ip = ${leaders[i+1]}; break;`);
+      } else {
+        lines.push('      state.halted = true; break;');
+      }
     }
     lines.push('    }');
   }

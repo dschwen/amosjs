@@ -7,9 +7,11 @@ module.exports = ({ it }) => {
     const ir = [
       { op: 'LABEL', name: 'START' },
       { op: 'PRINT', args: ['HELLO'] },
+      { op: 'PRINT', args: ['WORLD'] },
       { op: 'END' },
     ];
     const js = generateJS(ir);
+    console.log(js);
     const module = { exports: {} };
     const fn = new Function('module','exports', js + '\nmodule.exports={createRunner};');
     fn(module, module.exports);
