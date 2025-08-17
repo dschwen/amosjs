@@ -135,6 +135,26 @@ function parsePrimary(src, cursor, end, tokTable) {
       const rhs = parsePrimary(src, cursor, end, tokTable);
       return { type: 'unary', op: 'NOT', expr: rhs };
     }
+    // Generic function call: NAME '(' args ')' -> {type:'call', name, args}
+    const nextTk = deek(src, cursor.p);
+    const tNext = tokenName(src, cursor.p + 2, nextTk, tokTable);
+    if (tNext.name === '(') {
+      cursor.p += 2 + (nextTk === TK_EXT ? 4 : 0); // consume '('
+      const args = [];
+      while (cursor.p < end) {
+        const arg = parseExpression(src, cursor, end, tokTable, 0);
+        if (arg) args.push(arg);
+        const sepTk = deek(src, cursor.p);
+        const tSep = tokenName(src, cursor.p + 2, sepTk, tokTable);
+        if (tSep.name === ',') {
+          cursor.p += 2 + (sepTk === TK_EXT ? 4 : 0);
+          continue;
+        }
+        break;
+      }
+      const closeTk = deek(src, cursor.p); cursor.p += 2; const tClose = tokenName(src, cursor.p, closeTk, tokTable); cursor.p += tClose.adv;
+      return { type: 'call', name, args };
+    }
     return null;
   }
 }
@@ -298,6 +318,36 @@ function handleProc(state) {
   return p;
 }
 
+function handleGenericCommand(state, name) {
+  let { src, p, ir, endline, tokTable, lineIndex } = state;
+  const parts = [];
+  let current = { keyword: null, args: [] };
+  parts.push(current);
+  while (p < endline) {
+    const cursor = { p };
+    const expr = parseExpression(src, cursor, endline, tokTable, 0);
+    if (expr) {
+      p = cursor.p;
+      current.args.push(expr);
+    } else {
+      const tk = deek(src, p);
+      const t = tokenName(src, p + 2, tk, tokTable);
+      if (!t.name || t.name === ':') break;
+      p += 2 + (tk === TK_EXT ? 4 : 0);
+      current = { keyword: t.name, args: [] };
+      parts.push(current);
+    }
+    const sepTk = deek(src, p);
+    const tSep = tokenName(src, p + 2, sepTk, tokTable);
+    if (tSep.name === ',' || tSep.name === ';') {
+      p += 2 + (sepTk === TK_EXT ? 4 : 0);
+      continue;
+    }
+  }
+  ir.push({ op: 'CMD', name, parts, lineIndex });
+  return p;
+}
+
 const NAME_HANDLERS = new Map([
   ['PRINT', handlePrint],
   ['GOTO', handleGoto],
@@ -326,7 +376,7 @@ const CODE_HANDLERS = new Map([
 
 function parseSourceToIR(buf, options = {}) {
   const rootDir = options.rootDir || process.cwd();
-  const tokTable = buildTokenTable(rootDir);
+  const tokTable = options.tokTable || buildTokenTable(rootDir);
   const { src } = parseHeader(buf);
   const ir = [];
   const labels = new Map();
@@ -367,6 +417,7 @@ function parseSourceToIR(buf, options = {}) {
           continue;
         }
         const key = keyForToken(tk, src, p);
+        const nameStart = p - 2; // beginning of this token
         if (tk === TK_EXT) p += 4;
         const ent = tokTable.get(key);
         const name = ent ? ent.name : `UNK_${(key>>>16)}_${(key&0xffff).toString(16)}`;
@@ -375,7 +426,20 @@ function parseSourceToIR(buf, options = {}) {
         if (handler) {
           p = handler({ src, p, ir, lineIndex, endline, tokTable, pendingLabelRefs, forStack });
         } else {
-          // Unknown token: ignore for now
+          const lookTk = deek(src, p);
+          const look = tokenName(src, p + 2, lookTk, tokTable);
+          if (look.name === '(') {
+            const cursor = { p: nameStart };
+            const expr = parseExpression(src, cursor, endline, tokTable, 0);
+            p = cursor.p;
+            if (expr && expr.type === 'call') {
+              ir.push({ op: 'CALL', name: expr.name, args: expr.args, lineIndex });
+            } else if (expr) {
+              ir.push({ op: 'EXPR', expr, lineIndex });
+            }
+          } else {
+            p = handleGenericCommand({ src, p, ir, lineIndex, endline, tokTable, pendingLabelRefs, forStack }, upper);
+          }
         }
       }
     }
