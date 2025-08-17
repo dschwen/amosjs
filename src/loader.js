@@ -171,7 +171,150 @@ function parseExpression(src, cursor, end, tokTable, minPrec = 0) {
   return parseBinRhs(src, cursor, end, tokTable, minPrec, lhs);
 }
 
-// IR opcodes
+// ---- Token handlers ----
+
+function handlePrint(state) {
+  let { src, p, ir, lineIndex, endline, tokTable } = state;
+  // Allow multiple comma/semicolon separated expressions
+  do {
+    const cursor = { p };
+    const ast = parseExpression(src, cursor, endline, tokTable, 0);
+    p = cursor.p;
+    if (ast) ir.push({ op: 'PRINT', expr: ast, lineIndex });
+    else ir.push({ op: 'PRINT', args: [], lineIndex });
+    const sepTk = deek(src, p);
+    const tSep = tokenName(src, p + 2, sepTk, tokTable);
+    if (!tSep.name || (tSep.name !== ',' && tSep.name !== ';')) break;
+    p += 2 + (sepTk === TK_EXT ? 4 : 0);
+  } while (p < endline);
+  return p;
+}
+
+function handleGoto(state) {
+  let { src, p, ir, pendingLabelRefs, lineIndex } = state;
+  const nextTk = deek(src, p);
+  if (nextTk === TK_LGO) {
+    p += 2;
+    const v = readVarLike(src, p, nextTk);
+    p += v.size;
+    ir.push({ op: 'GOTO', label: v.name.toUpperCase(), lineIndex });
+    pendingLabelRefs.push({ ip: ir.length - 1, kind: 'GOTO', name: v.name.toUpperCase() });
+  }
+  return p;
+}
+
+function handleGosub(state) {
+  let { src, p, ir, pendingLabelRefs, lineIndex } = state;
+  const nextTk = deek(src, p);
+  if (nextTk === TK_LGO) {
+    p += 2;
+    const v = readVarLike(src, p, nextTk);
+    p += v.size;
+    ir.push({ op: 'GOSUB', label: v.name.toUpperCase(), lineIndex });
+    pendingLabelRefs.push({ ip: ir.length - 1, kind: 'GOSUB', name: v.name.toUpperCase() });
+  }
+  return p;
+}
+
+function handleReturn(state) {
+  const { ir, lineIndex } = state;
+  ir.push({ op: 'RETURN', lineIndex });
+  return state.p;
+}
+
+function handleEnd(state) {
+  const { ir, lineIndex } = state;
+  ir.push({ op: 'END', lineIndex });
+  return state.p;
+}
+
+function handleFor(state) {
+  let { src, p, ir, tokTable, forStack, lineIndex } = state;
+  const varTk = deek(src, p);
+  if (varTk === TK_VAR) {
+    p += 2;
+    const vref = readVarLike(src, p, varTk);
+    p += vref.size;
+    const eqTk = deek(src, p);
+    if (eqTk >= 0) {
+      const key2 = keyForToken(eqTk, src, p + 2);
+      const ent2 = tokTable.get(key2);
+      const name2 = ent2 ? ent2.name.toUpperCase() : '';
+      if (eqTk === TK_EXT) p += 4;
+      p += 2;
+      if (name2 !== '=') {
+        // unmatched, leave p as-is
+      }
+    }
+    let from = 0, to = 0, step = 1;
+    if (deek(src, p) === TK_ENT) {
+      p += 2; const c1 = readConst(src, p, TK_ENT); from = c1.value|0; p += c1.size;
+    }
+    const toTk = deek(src, p);
+    const kTo = keyForToken(toTk, src, p + 2);
+    const entTo = tokTable.get(kTo); const nameTo = entTo ? entTo.name.toUpperCase() : '';
+    if (toTk === TK_EXT) p += 4; p += 2;
+    if (nameTo === 'TO') {
+      if (deek(src, p) === TK_ENT) { p += 2; const c2 = readConst(src, p, TK_ENT); to = c2.value|0; p += c2.size; }
+      const stepTk = deek(src, p);
+      const kS = keyForToken(stepTk, src, p + 2);
+      const entS = tokTable.get(kS); const nameS = entS ? entS.name.toUpperCase() : '';
+      if (stepTk === TK_EXT) p += 4;
+      if (nameS === 'STEP') {
+        p += 2; if (deek(src, p) === TK_ENT) { p += 2; const c3 = readConst(src, p, TK_ENT); step = c3.value|0; p += c3.size; }
+      }
+      ir.push({ op: 'FOR', var: vref.name.toUpperCase(), from, to, step, lineIndex });
+      forStack.push({ name: vref.name.toUpperCase(), ip: ir.length - 1 });
+    }
+  }
+  return p;
+}
+
+function handleNext(state) {
+  let { src, p, ir, forStack, lineIndex } = state;
+  let varName = null;
+  const t = deek(src, p);
+  if (t === TK_VAR) { p += 2; const vref = readVarLike(src, p, t); p += vref.size; varName = vref.name.toUpperCase(); }
+  let matchIp = null;
+  for (let i = forStack.length - 1; i >= 0; i--) {
+    if (!varName || forStack[i].name === varName) { matchIp = forStack[i].ip; break; }
+  }
+  ir.push({ op: 'NEXT', var: varName, forIp: matchIp, lineIndex });
+  return p;
+}
+
+function handleRemark(state) {
+  let { src, p, ir, lineIndex } = state;
+  const len = src[p + 1] || 0;
+  const text = String.fromCharCode(...src.slice(p + 2, p + 2 + len));
+  p += 2 + len + (len & 1 ? 1 : 0);
+  ir.push({ op: 'REM', text, lineIndex });
+  return p;
+}
+
+function handleProc(state) {
+  let { p, ir, lineIndex } = state;
+  p += 8; ir.push({ op: 'PROC', lineIndex });
+  return p;
+}
+
+const NAME_HANDLERS = new Map([
+  ['PRINT', handlePrint],
+  ['GOTO', handleGoto],
+  ['GOSUB', handleGosub],
+  ['RETURN', handleReturn],
+  ['END', handleEnd],
+  ['FOR', handleFor],
+  ['NEXT', handleNext],
+]);
+
+const CODE_HANDLERS = new Map([
+  [TK_REM1, handleRemark],
+  [TK_REM2, handleRemark],
+  [TK_PROC, handleProc],
+]);
+
+// IR opcodes (for reference)
 // PRINT {args:[literal|string|varName]}
 // GOTO {label}
 // GOSUB {label}
@@ -201,8 +344,6 @@ function parseSourceToIR(buf, options = {}) {
     let p = inpos;
     // Keep a simple statement builder
     while (p < endline) {
-      const token = deek(src, p - 2 + 2); // actually p points to tokens already
-      // But since we track p as pointer to tokens area, we need to read directly
       const tk = deek(src, p);
       if (tk === 0) { p += 2; break; }
       p += 2;
@@ -211,119 +352,28 @@ function parseSourceToIR(buf, options = {}) {
         const v = readVarLike(src, p, tk);
         p += v.size;
         if (tk === TK_LAB) {
-          // label definition at start of line or mid-line
-          labels.set(v.name.toUpperCase(), ir.length); // next ip
+          labels.set(v.name.toUpperCase(), ir.length);
           ir.push({ op: 'LABEL', name: v.name.toUpperCase(), lineIndex });
         }
-        // other variable-like tokens handled as part of following ops
         continue;
       } else if (tk < TK_EXT || tk === 0x2B6A) {
         const c = readConst(src, p, tk);
         p += c.size;
-        // constants are arguments to preceding ops (handled inline below)
         continue;
       } else {
-        // General token: look up name
+        const codeHandler = CODE_HANDLERS.get(tk);
+        if (codeHandler) {
+          p = codeHandler({ src, p, ir, lineIndex, endline, tokTable, pendingLabelRefs, forStack });
+          continue;
+        }
         const key = keyForToken(tk, src, p);
-        if (tk === TK_EXT) p += 4; // consumed ext token payload
+        if (tk === TK_EXT) p += 4;
         const ent = tokTable.get(key);
         const name = ent ? ent.name : `UNK_${(key>>>16)}_${(key&0xffff).toString(16)}`;
         const upper = name.toUpperCase();
-        if (upper === 'PRINT') {
-          // Parse an expression (optional)
-          const cursor = { p };
-          const ast = parseExpression(src, cursor, endline, tokTable, 0);
-          p = cursor.p;
-          if (ast) ir.push({ op: 'PRINT', expr: ast, lineIndex });
-          else ir.push({ op: 'PRINT', args: [], lineIndex });
-        } else if (upper === 'GOTO') {
-          // Next token must be label ref
-          const nextTk = deek(src, p);
-          if (nextTk === TK_LGO) {
-            p += 2;
-            const v = readVarLike(src, p, nextTk);
-            p += v.size;
-            ir.push({ op: 'GOTO', label: v.name.toUpperCase(), lineIndex });
-            pendingLabelRefs.push({ ip: ir.length - 1, kind: 'GOTO', name: v.name.toUpperCase() });
-          }
-        } else if (upper === 'GOSUB') {
-          const nextTk = deek(src, p);
-          if (nextTk === TK_LGO) {
-            p += 2;
-            const v = readVarLike(src, p, nextTk);
-            p += v.size;
-            ir.push({ op: 'GOSUB', label: v.name.toUpperCase(), lineIndex });
-            pendingLabelRefs.push({ ip: ir.length - 1, kind: 'GOSUB', name: v.name.toUpperCase() });
-          }
-        } else if (upper === 'RETURN') {
-          ir.push({ op: 'RETURN', lineIndex });
-        } else if (upper === 'END') {
-          ir.push({ op: 'END', lineIndex });
-        } else if (tk === TK_FOR) {
-          // Support very limited: FOR <var> = <int> TO <int> [STEP <int>]
-          // After FOR, expect variable token TK_VAR
-          const varTk = deek(src, p);
-          if (varTk === TK_VAR) {
-            p += 2;
-            const vref = readVarLike(src, p, varTk);
-            p += vref.size;
-            const eqTk = deek(src, p); // expect '=' token name
-            // skip '=' if present by looking up name
-            if (eqTk >= TK_EXT || eqTk < TK_EXT) {
-              const key2 = keyForToken(eqTk, src, p + 2);
-              const ent2 = tokTable.get(key2);
-              const name2 = ent2 ? ent2.name.toUpperCase() : '';
-              // move past this token payload if extension
-              if (eqTk === TK_EXT) p += 4; // after reading deek only; adjust minimal
-              p += 2; // consume token code itself
-              if (name2 !== '=') {
-                // roll back token consumption failure safety
-              }
-            }
-            // read start int const
-            let from = 0, to = 0, step = 1;
-            if (deek(src, p) === TK_ENT) {
-              p += 2; const c1 = readConst(src, p, TK_ENT); from = c1.value|0; p += c1.size;
-            }
-            // expect TO
-            const toTk = deek(src, p);
-            const kTo = keyForToken(toTk, src, p + 2);
-            const entTo = tokTable.get(kTo); const nameTo = entTo ? entTo.name.toUpperCase() : '';
-            if (toTk === TK_EXT) p += 4; p += 2;
-            if (nameTo !== 'TO') {
-              // not recognized; skip building FOR
-            } else {
-              if (deek(src, p) === TK_ENT) { p += 2; const c2 = readConst(src, p, TK_ENT); to = c2.value|0; p += c2.size; }
-              // optional STEP
-              const stepTk = deek(src, p);
-              const kS = keyForToken(stepTk, src, p + 2);
-              const entS = tokTable.get(kS); const nameS = entS ? entS.name.toUpperCase() : '';
-              if (stepTk === TK_EXT) p += 4;
-              if (nameS === 'STEP') { p += 2; if (deek(src, p) === TK_ENT) { p += 2; const c3 = readConst(src, p, TK_ENT); step = c3.value|0; p += c3.size; } }
-              ir.push({ op: 'FOR', var: vref.name.toUpperCase(), from, to, step, lineIndex });
-              forStack.push({ name: vref.name.toUpperCase(), ip: ir.length - 1 });
-            }
-          }
-        } else if (upper === 'NEXT') {
-          // NEXT [var]
-          let varName = null;
-          const t = deek(src, p);
-          if (t === TK_VAR) { p += 2; const vref = readVarLike(src, p, t); p += vref.size; varName = vref.name.toUpperCase(); }
-          // match to top of forStack (best-effort)
-          let matchIp = null;
-          for (let i = forStack.length - 1; i >= 0; i--) {
-            if (!varName || forStack[i].name === varName) { matchIp = forStack[i].ip; break; }
-          }
-          ir.push({ op: 'NEXT', var: varName, forIp: matchIp, lineIndex });
-        } else if (tk === TK_REM1 || tk === TK_REM2) {
-          // skip remark payload and capture text
-          const len = src[p + 1] || 0;
-          const text = String.fromCharCode(...src.slice(p + 2, p + 2 + len));
-          p += 2 + len + (len & 1 ? 1 : 0);
-          ir.push({ op: 'REM', text, lineIndex });
-        } else if (tk === TK_PROC) {
-          // Skip PROC metadata
-          p += 8; ir.push({ op: 'PROC', lineIndex });
+        const handler = NAME_HANDLERS.get(upper);
+        if (handler) {
+          p = handler({ src, p, ir, lineIndex, endline, tokTable, pendingLabelRefs, forStack });
         } else {
           // Unknown token: ignore for now
         }
