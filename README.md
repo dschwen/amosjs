@@ -5,4 +5,5 @@ Transpile AMOS (.AMOS) programs from the Commodore Amiga into JavaScript. Execut
 - Docs: see `docs/design.md` for architecture and plan.
 - CLI: `amosjs transpile file.AMOS -o out.js` (skeleton), `amosjs run file.AMOS` (skeleton).
 - Status: scaffolding + utilities and tests. Parser and codegen forthcoming per design.
+- Features: modular token handlers, multi-argument `PRINT` support, REM comments emitted in JS.
 

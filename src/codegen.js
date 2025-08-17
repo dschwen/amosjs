@@ -59,9 +59,17 @@ function generateJS(ir) {
         if (ins.expr) {
           const expr = emitExpr(ins.expr);
           lines.push(`      io.print(${expr});`);
+        } else if (ins.exprs && ins.exprs.length) {
+          for (const e of ins.exprs) {
+            const expr = emitExpr(e);
+            lines.push(`      io.print(${expr});`);
+          }
+        } else if (ins.args && ins.args.length) {
+          for (const arg of ins.args) {
+            lines.push(`      io.print(${JSON.stringify(String(arg))});`);
+          }
         } else {
-          const arg = (ins.args && ins.args.length) ? JSON.stringify(String(ins.args[0])) : '""';
-          lines.push(`      io.print(${arg});`);
+          lines.push('      io.print("");');
         }
       } else if (ins.op === 'SET') {
         const val = Number(ins.value|0);
