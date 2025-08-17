@@ -52,9 +52,23 @@ function generateJS(ir) {
     for (let ip = start; ip < end; ip++) {
       const ins = ir[ip];
       // Emit sequential execution; branch ops break out by setting state.ip
-      if (ins.op === 'PRINT') {
-        const arg = (ins.args && ins.args.length) ? JSON.stringify(String(ins.args[0])) : '""';
-        lines.push(`      io.print(${arg});`);
+      if (ins.op === 'REM') {
+        const t = (ins.text || '').replace(/\*\//g, '*\/');
+        lines.push(`      // ${t}`);
+      } else if (ins.op === 'PRINT') {
+        if (ins.expr) {
+          const expr = emitExpr(ins.expr);
+          lines.push(`      io.print(${expr});`);
+        } else {
+          const arg = (ins.args && ins.args.length) ? JSON.stringify(String(ins.args[0])) : '""';
+          lines.push(`      io.print(${arg});`);
+        }
+      } else if (ins.op === 'SET') {
+        const val = Number(ins.value|0);
+        lines.push(`      state.vars[${JSON.stringify(ins.var)}] = ${val};`);
+      } else if (ins.op === 'IF_EQ') {
+        const l = typeof ins.target === 'number' ? ipToLeader[ins.target] : 0;
+        lines.push(`      if ((state.vars[${JSON.stringify(ins.var)}]||0) === ${Number(ins.value|0)}) { state.ip = ${l}; break; }`);
       } else if (ins.op === 'GOTO') {
         const tgt = typeof ins.target === 'number' ? ins.target : 0;
         const l = ipToLeader[tgt];
@@ -108,6 +122,31 @@ function generateJS(ir) {
   lines.push('  function run(){ schedule(function loop(){ if(!state.halted){ tick(); schedule(loop);} }); }');
   lines.push('  return { run, state };');
   lines.push('}');
+  // Emit minimal expression emitter inline
+  function emitExpr(node){
+    switch (node.type) {
+      case 'num': return String(Number(node.value||0));
+      case 'str': return JSON.stringify(String(node.value||''));
+      case 'var': return `((state.vars[${JSON.stringify(node.name)}]??0))`;
+      case 'unary':
+        if (node.op === 'NOT') return `(!(${emitExpr(node.expr)}))`;
+        return `(-(${emitExpr(node.expr)}))`;
+      case 'binary': {
+        const op = mapOp(node.op);
+        return `((${emitExpr(node.left)}) ${op} (${emitExpr(node.right)}))`;
+      }
+      default: return '0';
+    }
+  }
+  function mapOp(op){
+    switch (op) {
+      case '=': return '==';
+      case '<>': return '!=';
+      case 'AND': return '&&';
+      case 'OR': return '||';
+      default: return op;
+    }
+  }
   return lines.join('\n');
 }
 

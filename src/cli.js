@@ -2,19 +2,22 @@
 const fs = require('fs');
 const path = require('path');
 const { transpile, run } = require('./index');
+const { parseSourceToIR } = require('./loader');
+const { generateJS } = require('./codegen');
 
 function usage() {
   console.log('Usage: amosjs <command> <file.AMOS> [options]');
   console.log('Commands:');
   console.log('  transpile <in> -o <out.js>');
   console.log('  run <in>');
+  console.log('  ir <in>           # print IR and generated JS');
 }
 
 async function main(argv) {
   const args = argv.slice(2);
   if (args.length === 0) { usage(); process.exit(1); }
   const cmd = args[0];
-  if ((cmd === 'transpile' || cmd === 'run') && !args[1]) { usage(); process.exit(1); }
+  if ((cmd === 'transpile' || cmd === 'run' || cmd === 'ir') && !args[1]) { usage(); process.exit(1); }
   const infile = args[1];
   if (!fs.existsSync(infile)) { console.error(`No such file: ${infile}`); process.exit(1); }
   const buf = fs.readFileSync(infile);
@@ -27,6 +30,13 @@ async function main(argv) {
     console.log(`Wrote ${outFile}`);
   } else if (cmd === 'run') {
     await run(buf, { filename: infile, io: { print: (s) => process.stdout.write(String(s)) } });
+  } else if (cmd === 'ir') {
+    const { ir } = parseSourceToIR(new Uint8Array(buf), { rootDir: process.cwd() });
+    console.log('--- IR ---');
+    console.log(JSON.stringify(ir, null, 2));
+    const js = generateJS(ir);
+    console.log('--- JS ---');
+    console.log(js);
   } else {
     usage();
     process.exit(1);
@@ -34,4 +44,3 @@ async function main(argv) {
 }
 
 main(process.argv).catch((e) => { console.error(e); process.exit(1); });
-

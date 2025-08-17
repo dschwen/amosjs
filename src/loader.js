@@ -41,7 +41,10 @@ function readVarLike(src, off, token) {
   // Format: token(2) then 2 bytes unk, 1 byte len, 1 byte flags, then name padded to even, null-terminated.
   const length = src[off + 2];
   const flags = src[off + 3];
-  const nameBytes = src.slice(off + 4, off + 4 + length);
+  let nameBytes = src.slice(off + 4, off + 4 + length);
+  // Trim at first NUL within declared length, if any
+  let cut = nameBytes.indexOf(0);
+  if (cut !== -1) nameBytes = nameBytes.slice(0, cut);
   const name = String.fromCharCode(...nameBytes);
   const size = ((length & 1) ? 5 : 4) + length; // as in listamos
   return { kind: token, name, flags, size };
@@ -82,6 +85,92 @@ function keyForToken(token, src, off) {
   }
 }
 
+// -------- Expression parsing (minimal) ---------
+// AST nodes: {type:'num'|'str'|'var'|'binary'|'unary', ...}
+const OP_PRECEDENCE = new Map([
+  ['OR', 1],
+  ['AND', 2],
+  ['=', 3], ['<>', 3], ['<', 3], ['>', 3], ['<=', 3], ['>=', 3],
+  ['+', 4], ['-', 4],
+  ['*', 5], ['/', 5]
+]);
+
+function tokenName(src, p, tk, tokTable) {
+  if (tk === 0) return { name: null, adv: 0 };
+  if (tk === TK_EXT) {
+    const key = keyForToken(tk, src, p);
+    const ent = tokTable.get(key);
+    return { name: ent ? ent.name.toUpperCase() : null, adv: 4 };
+  } else {
+    const key = keyForToken(tk, src, p);
+    const ent = tokTable.get(key);
+    return { name: ent ? ent.name.toUpperCase() : null, adv: 0 };
+  }
+}
+
+function parsePrimary(src, cursor, end, tokTable) {
+  if (cursor.p >= end) return null;
+  const tk = deek(src, cursor.p);
+  if (tk === 0) return null;
+  cursor.p += 2;
+  if (tk <= TK_LGO) {
+    const v = readVarLike(src, cursor.p, tk);
+    cursor.p += v.size;
+    if (tk === TK_VAR) return { type: 'var', name: v.name.toUpperCase() };
+    return null;
+  } else if (tk < TK_EXT || tk === 0x2B6A) {
+    if (tk === TK_ENT) { const c = readConst(src, cursor.p, tk); cursor.p += c.size; return { type: 'num', value: Number(c.value|0) }; }
+    if (tk === TK_CH1 || tk === TK_CH2) { const c = readConst(src, cursor.p, tk); cursor.p += c.size; return { type: 'str', value: String(c.value) }; }
+    const c = readConst(src, cursor.p, tk); cursor.p += c.size; return null;
+  } else {
+    const { name, adv } = tokenName(src, cursor.p, tk, tokTable);
+    cursor.p += adv;
+    if (name === '(') {
+      const expr = parseExpression(src, cursor, end, tokTable, 0);
+      // consume closing ')'
+      const tk2 = deek(src, cursor.p); cursor.p += 2; const t2 = tokenName(src, cursor.p, tk2, tokTable); cursor.p += t2.adv;
+      return expr;
+    }
+    if (name === 'NOT') {
+      const rhs = parsePrimary(src, cursor, end, tokTable);
+      return { type: 'unary', op: 'NOT', expr: rhs };
+    }
+    return null;
+  }
+}
+
+function parseBinRhs(src, cursor, end, tokTable, exprPrec, lhs) {
+  for (;;) {
+    const save = cursor.p;
+    const tk = deek(src, cursor.p);
+    if (tk === 0) return lhs;
+    const t = tokenName(src, cursor.p + 2, tk, tokTable); // name lookup without bumping p yet
+    // consume tk now
+    cursor.p += 2 + (tk === TK_EXT ? 4 : 0);
+    if (!t.name || !OP_PRECEDENCE.has(t.name)) { cursor.p = save; return lhs; }
+    const prec = OP_PRECEDENCE.get(t.name);
+    if (prec < exprPrec) { cursor.p = save; return lhs; }
+
+    let rhs = parsePrimary(src, cursor, end, tokTable);
+    if (!rhs) return lhs;
+    for (;;) {
+      const nextTk = deek(src, cursor.p);
+      const look = tokenName(src, cursor.p + 2, nextTk, tokTable);
+      const nextPrec = look.name ? (OP_PRECEDENCE.get(look.name) || -1) : -1;
+      if (nextPrec > prec) {
+        rhs = parseBinRhs(src, cursor, end, tokTable, prec + 1, rhs);
+      } else break;
+    }
+    lhs = { type: 'binary', op: t.name, left: lhs, right: rhs };
+  }
+}
+
+function parseExpression(src, cursor, end, tokTable, minPrec = 0) {
+  const lhs = parsePrimary(src, cursor, end, tokTable);
+  if (!lhs) return null;
+  return parseBinRhs(src, cursor, end, tokTable, minPrec, lhs);
+}
+
 // IR opcodes
 // PRINT {args:[literal|string|varName]}
 // GOTO {label}
@@ -119,7 +208,7 @@ function parseSourceToIR(buf, options = {}) {
       p += 2;
 
       if (tk <= TK_LGO) {
-        const v = readVarLike(src, p - 2, tk);
+        const v = readVarLike(src, p, tk);
         p += v.size;
         if (tk === TK_LAB) {
           // label definition at start of line or mid-line
@@ -141,21 +230,12 @@ function parseSourceToIR(buf, options = {}) {
         const name = ent ? ent.name : `UNK_${(key>>>16)}_${(key&0xffff).toString(16)}`;
         const upper = name.toUpperCase();
         if (upper === 'PRINT') {
-          // Very minimal: expect a string or number constant next
-          const nextTk = deek(src, p);
-          let arg = null;
-          if (nextTk === TK_CH1 || nextTk === TK_CH2) {
-            p += 2;
-            const c = readConst(src, p, nextTk);
-            arg = c.value;
-            p += c.size;
-          } else if (nextTk === TK_ENT) {
-            p += 2;
-            const c = readConst(src, p, nextTk);
-            arg = String(c.value);
-            p += c.size;
-          }
-          ir.push({ op: 'PRINT', args: arg != null ? [arg] : [], lineIndex });
+          // Parse an expression (optional)
+          const cursor = { p };
+          const ast = parseExpression(src, cursor, endline, tokTable, 0);
+          p = cursor.p;
+          if (ast) ir.push({ op: 'PRINT', expr: ast, lineIndex });
+          else ir.push({ op: 'PRINT', args: [], lineIndex });
         } else if (upper === 'GOTO') {
           // Next token must be label ref
           const nextTk = deek(src, p);
@@ -236,9 +316,11 @@ function parseSourceToIR(buf, options = {}) {
           }
           ir.push({ op: 'NEXT', var: varName, forIp: matchIp, lineIndex });
         } else if (tk === TK_REM1 || tk === TK_REM2) {
-          // skip remark payload
-          const len = src[p + 1] || 0; p += 2 + len + (len & 1 ? 1 : 0);
-          ir.push({ op: 'REM', lineIndex });
+          // skip remark payload and capture text
+          const len = src[p + 1] || 0;
+          const text = String.fromCharCode(...src.slice(p + 2, p + 2 + len));
+          p += 2 + len + (len & 1 ? 1 : 0);
+          ir.push({ op: 'REM', text, lineIndex });
         } else if (tk === TK_PROC) {
           // Skip PROC metadata
           p += 8; ir.push({ op: 'PROC', lineIndex });
@@ -261,4 +343,3 @@ function parseSourceToIR(buf, options = {}) {
 }
 
 module.exports = { parseSourceToIR };
-

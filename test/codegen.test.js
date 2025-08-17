@@ -11,7 +11,6 @@ module.exports = ({ it }) => {
       { op: 'END' },
     ];
     const js = generateJS(ir);
-    console.log(js);
     const module = { exports: {} };
     const fn = new Function('module','exports', js + '\nmodule.exports={createRunner};');
     fn(module, module.exports);
