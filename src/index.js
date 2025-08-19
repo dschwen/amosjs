@@ -1,6 +1,7 @@
 'use strict';
 const { parseSourceToIR } = require('./loader');
 const { generateJS } = require('./codegen');
+const { createDefaultIO } = require('./runtime/default_io');
 
 function transpile(buf, opts = {}) {
   const { ir, labels } = parseSourceToIR(new Uint8Array(buf), { rootDir: process.cwd() });
@@ -15,7 +16,7 @@ async function run(buf, opts = {}) {
   const module = { exports: {} };
   const fn = new Function('module', 'exports', code);
   fn(module, module.exports);
-  const io = (opts && opts.io) || { print: (s) => process.stdout.write(String(s)) };
+  const io = (opts && opts.io) || createDefaultIO();
   const runner = module.exports.createRunner(io);
   runner.run();
 }
