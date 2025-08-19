@@ -108,6 +108,16 @@ function generateJS(ir) {
         lines.push(`        for(; i>=0; i--){ const f=state.stack[i]; if(f.type==='FOR'${ins.var?` && f.name===${JSON.stringify(ins.var)}`:''}){ break; } }`);
         lines.push(`        if (i>=0){ const f=state.stack[i]; const name=f.name; const step=f.step; state.vars[name] = (state.vars[name]||0) + step; if ((step>=0 && state.vars[name] <= f.to) || (step<0 && state.vars[name] >= f.to)) { state.ip = f.loop; break; } else { state.stack.splice(i,1); } }`);
         lines.push(`      }`);
+      } else if (ins.op === 'CALL') {
+        const args = (ins.args || []).map(e => emitExpr(e)).join(', ');
+        lines.push(`      if (io && io.call) io.call(${JSON.stringify(ins.name || '')}, [${args}], state);`);
+      } else if (ins.op === 'CMD') {
+        // Emit structured parts with evaluated args
+        const parts = (ins.parts || []).map(part => {
+          const arr = (part.args || []).map(a => emitExpr(a)).join(', ');
+          return `{keyword:${JSON.stringify(part.keyword||null)}, args:[${arr}]}`;
+        }).join(', ');
+        lines.push(`      if (io && io.cmd) io.cmd(${JSON.stringify(ins.name || '')}, [${parts}], state);`);
       }
       // no blank lines between statements
     }
@@ -145,7 +155,9 @@ function generateJS(ir) {
           const args = node.args && node.args.length ? node.args.map(a=>emitExpr(a)).join(', ') : '';
           return `(io.input(${args}))`;
         }
-        return '0';
+        const args = node.args && node.args.length ? node.args.map(a=>emitExpr(a)).join(', ') : '';
+        // Delegate unknown functions to io.func(name, args[], state) if provided; fallback to 0
+        return `((io && io.func) ? io.func(${JSON.stringify(node.name||'')}, [${args}], state) : 0)`;
       }
       default: return '0';
     }
