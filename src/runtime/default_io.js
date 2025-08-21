@@ -63,6 +63,41 @@ function createDefaultIO(host = {}) {
         case 'PAPER':
           if (host && typeof host.paper === 'function') host.paper(parts && parts[0] && parts[0].args ? parts[0].args[0] : undefined);
           break;
+        case 'PLOT': {
+          if (host && typeof host.plot === 'function') {
+            const a = parts && parts[0] && parts[0].args || [];
+            host.plot(a[0]|0, a[1]|0);
+          }
+          break;
+        }
+        case 'LINE': {
+          if (host && typeof host.line === 'function') {
+            const a0 = parts && parts[0] && parts[0].args || [];
+            let x1 = a0[0]|0, y1 = a0[1]|0, x2 = x1, y2 = y1;
+            const pTo = (parts || []).find(p => (p.keyword||'').toUpperCase() === 'TO');
+            if (pTo && pTo.args && pTo.args.length >= 2) { x2 = pTo.args[0]|0; y2 = pTo.args[1]|0; }
+            host.line(x1, y1, x2, y2);
+          }
+          break;
+        }
+        case 'BOX': {
+          if (host && typeof host.rect === 'function') {
+            const a0 = parts && parts[0] && parts[0].args || [];
+            let x1 = a0[0]|0, y1 = a0[1]|0, x2 = x1, y2 = y1;
+            const pTo = (parts || []).find(p => (p.keyword||'').toUpperCase() === 'TO');
+            if (pTo && pTo.args && pTo.args.length >= 2) { x2 = pTo.args[0]|0; y2 = pTo.args[1]|0; }
+            host.rect(x1, y1, x2, y2);
+          }
+          break;
+        }
+        case 'CIRCLE': {
+          if (host && typeof host.circle === 'function') {
+            const a0 = parts && parts[0] && parts[0].args || [];
+            const cx = a0[0]|0, cy = a0[1]|0, r = (a0[2]|0);
+            host.circle(cx, cy, r);
+          }
+          break;
+        }
         case 'HSLIDER':
           if (host && typeof host.hslider === 'function') host.hslider(parts);
           break;
@@ -79,4 +114,3 @@ function createDefaultIO(host = {}) {
 }
 
 module.exports = { createDefaultIO };
-
